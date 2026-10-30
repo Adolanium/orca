@@ -276,6 +276,15 @@ export function sshConfigHostsToTargets(
     const label = entry.host
 
     if (seenLabels.has(label)) {
+      // OpenSSH keeps every IdentityFile from later blocks. Other fields stay on the first block.
+      const laterFiles = entry.identityFiles ?? (entry.identityFile ? [entry.identityFile] : [])
+      const existing = targets.find((target) => target.label === label)
+      if (existing && laterFiles.length > 0) {
+        const kept =
+          existing.identityFiles ?? (existing.identityFile ? [existing.identityFile] : [])
+        existing.identityFiles = [...kept, ...laterFiles]
+        existing.identityFile ??= existing.identityFiles[0]
+      }
       continue
     }
     seenLabels.add(label)

@@ -481,6 +481,35 @@ describe('sshConfigHostsToTargets', () => {
       username: 'first'
     })
   })
+
+  it('keeps identity files from a later block for the same alias', () => {
+    const hosts = [
+      {
+        host: 'dup',
+        hostname: 'first.example.com',
+        identityFile: '/keys/first',
+        identityFiles: ['/keys/first']
+      },
+      {
+        host: 'dup',
+        hostname: 'second.example.com',
+        user: 'second',
+        port: 2222,
+        identityFile: '/keys/second',
+        identityFiles: ['/keys/second', '/keys/third']
+      }
+    ]
+    const targets = sshConfigHostsToTargets(hosts, new Set())
+
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({
+      host: 'first.example.com',
+      username: '',
+      port: 22,
+      identityFile: '/keys/first',
+      identityFiles: ['/keys/first', '/keys/second', '/keys/third']
+    })
+  })
 })
 
 describe('sshConfigHostsToSummaries', () => {
