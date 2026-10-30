@@ -25,7 +25,19 @@ function app(config: RelayConfig = cell) {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body)
     })
-  return { post, reserve, demote }
+  const postChunked = (path: string, body: string) =>
+    routes.request(path, {
+      method: 'POST',
+      headers: { authorization: 'Bearer director-token', 'content-type': 'application/json' },
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body))
+          controller.close()
+        }
+      }),
+      duplex: 'half'
+    } as RequestInit)
+  return { post, postChunked, reserve, demote }
 }
 
 const booking = {
@@ -59,4 +71,17 @@ describe('cell reserve routes', () => {
     expect(await reply.json()).toEqual({ v: 1, outcome: 'demoted' })
     expect(demote).toHaveBeenCalledWith({ ...seat, joinedAt: 1_000 })
   })
+
+  it.each(['/internal/reserve', '/internal/demote'])(
+    'rejects an oversized chunked body on %s without calling the handler',
+    async (path) => {
+      const { postChunked, reserve, demote } = app()
+      const response = await postChunked(path, ' '.repeat(16 * 1024 + 1))
+
+      expect(response.status).toBe(413)
+      expect(await response.json()).toEqual({ error: 'request_too_large' })
+      expect(reserve).not.toHaveBeenCalled()
+      expect(demote).not.toHaveBeenCalled()
+    }
+  )
 })

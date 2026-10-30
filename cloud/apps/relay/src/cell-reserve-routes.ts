@@ -1,4 +1,5 @@
 import type { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import {
   CELL_DEMOTE_PATH,
   CELL_RESERVE_PATH,
@@ -31,24 +32,22 @@ export function registerCellReserveRoutes(
   }
   const unauthorized = (status: 404 | 401) =>
     status === 404 ? { error: 'reserve_unavailable' } : { error: 'invalid_token' }
+  const limitBody = bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (context) => context.json({ error: 'request_too_large' }, 413)
+  })
 
-  app.post(CELL_RESERVE_PATH, async (context) => {
+  app.post(CELL_RESERVE_PATH, limitBody, async (context) => {
     const auth = await authorize(context.req.header('authorization'))
     if (auth !== 'ok') return context.json(unauthorized(auth), auth)
-    if (Number(context.req.header('content-length') ?? 0) > MAX_BODY_BYTES) {
-      return context.json({ error: 'request_too_large' }, 413)
-    }
     const body = ReserveRequestSchema.safeParse(await context.req.json().catch(() => null))
     if (!body.success) return context.json({ error: 'invalid_request' }, 400)
     return context.json({ v: 1, results: input.reserve!(body.data) })
   })
 
-  app.post(CELL_DEMOTE_PATH, async (context) => {
+  app.post(CELL_DEMOTE_PATH, limitBody, async (context) => {
     const auth = await authorize(context.req.header('authorization'))
     if (auth !== 'ok') return context.json(unauthorized(auth), auth)
-    if (Number(context.req.header('content-length') ?? 0) > MAX_BODY_BYTES) {
-      return context.json({ error: 'request_too_large' }, 413)
-    }
     const body = DemoteRequestSchema.safeParse(await context.req.json().catch(() => null))
     if (!body.success) return context.json({ error: 'invalid_request' }, 400)
     return context.json({ v: 1, outcome: input.demote!(body.data) })
