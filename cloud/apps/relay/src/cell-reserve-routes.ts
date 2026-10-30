@@ -1,4 +1,4 @@
-import type { Hono } from 'hono'
+import type { Hono, MiddlewareHandler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import {
   CELL_DEMOTE_PATH,
@@ -36,18 +36,20 @@ export function registerCellReserveRoutes(
     maxSize: MAX_BODY_BYTES,
     onError: (context) => context.json({ error: 'request_too_large' }, 413)
   })
-
-  app.post(CELL_RESERVE_PATH, limitBody, async (context) => {
+  // Hono reads a chunked body inside bodyLimit before next(). Check the caller first.
+  const requireDirector: MiddlewareHandler = async (context, next) => {
     const auth = await authorize(context.req.header('authorization'))
     if (auth !== 'ok') return context.json(unauthorized(auth), auth)
+    await next()
+  }
+
+  app.post(CELL_RESERVE_PATH, requireDirector, limitBody, async (context) => {
     const body = ReserveRequestSchema.safeParse(await context.req.json().catch(() => null))
     if (!body.success) return context.json({ error: 'invalid_request' }, 400)
     return context.json({ v: 1, results: input.reserve!(body.data) })
   })
 
-  app.post(CELL_DEMOTE_PATH, limitBody, async (context) => {
-    const auth = await authorize(context.req.header('authorization'))
-    if (auth !== 'ok') return context.json(unauthorized(auth), auth)
+  app.post(CELL_DEMOTE_PATH, requireDirector, limitBody, async (context) => {
     const body = DemoteRequestSchema.safeParse(await context.req.json().catch(() => null))
     if (!body.success) return context.json({ error: 'invalid_request' }, 400)
     return context.json({ v: 1, outcome: input.demote!(body.data) })

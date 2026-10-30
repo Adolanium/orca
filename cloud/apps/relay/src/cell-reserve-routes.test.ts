@@ -37,7 +37,7 @@ function app(config: RelayConfig = cell) {
       }),
       duplex: 'half'
     } as RequestInit)
-  return { post, postChunked, reserve, demote }
+  return { post, postChunked, reserve, demote, routes }
 }
 
 const booking = {
@@ -84,4 +84,66 @@ describe('cell reserve routes', () => {
       expect(demote).not.toHaveBeenCalled()
     }
   )
+
+  it.each(['/internal/reserve', '/internal/demote'])(
+    'refuses %s without waiting for a chunked body',
+    async (path) => {
+      const { routes, reserve, demote } = app()
+      const response = await Promise.race([
+        routes.request(path, {
+          method: 'POST',
+          headers: { authorization: 'Bearer someone-else', 'content-type': 'application/json' },
+          body: new ReadableStream<Uint8Array>({
+            pull: () => new Promise(() => {})
+          }),
+          duplex: 'half'
+        } as RequestInit),
+        new Promise<Response>((_, reject) => {
+          setTimeout(() => reject(new Error('waited for the body')), 200)
+        })
+      ])
+
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({ error: 'invalid_token' })
+      expect(reserve).not.toHaveBeenCalled()
+      expect(demote).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['/internal/reserve', '/internal/demote'])(
+    'refuses an unauthorized oversized %s before the size check',
+    async (path) => {
+      const { routes, reserve, demote } = app()
+      const response = await routes.request(path, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer someone-else',
+          'content-type': 'application/json',
+          'content-length': String(16 * 1024 + 1)
+        },
+        body: '{}'
+      })
+
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({ error: 'invalid_token' })
+      expect(reserve).not.toHaveBeenCalled()
+      expect(demote).not.toHaveBeenCalled()
+    }
+  )
+
+  it('hides a missing route before measuring an oversized body', async () => {
+    const { routes } = app({ ...cell, role: 'director' })
+    const response = await routes.request('/internal/reserve', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer director-token',
+        'content-type': 'application/json',
+        'content-length': String(16 * 1024 + 1)
+      },
+      body: '{}'
+    })
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ error: 'reserve_unavailable' })
+  })
 })
