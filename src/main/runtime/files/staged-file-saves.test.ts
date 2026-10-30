@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type * as FsPromises from 'node:fs/promises'
+import type * as SecureFile from '../../../shared/secure-file'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDiskBaselineSignature } from '../../../shared/disk-baseline-signature'
 import { STAGED_FILE_SAVE_LIMITS } from '../../../shared/staged-file-save'
@@ -20,6 +21,17 @@ import { StagedFileSaves } from './staged-file-saves'
 
 // An append can be held open to put other ops beside it.
 const appendGate = vi.hoisted((): { hold: Promise<void> | null } => ({ hold: null }))
+const secureWrite = vi.hoisted((): { refuse: boolean } => ({ refuse: false }))
+vi.mock('../../../shared/secure-file', async (importOriginal) => {
+  const actual = await importOriginal<typeof SecureFile>()
+  return {
+    ...actual,
+    writeSecureFile: (...args: Parameters<typeof actual.writeSecureFile>) => {
+      const wrote = actual.writeSecureFile(...args)
+      return secureWrite.refuse ? false : wrote
+    }
+  }
+})
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>()
   return {
@@ -39,6 +51,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'orca-staged-save-'))
   staging = join(root, 'profile', 'staged-saves')
   appendGate.hold = null
+  secureWrite.refuse = false
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -89,6 +102,17 @@ describe('a staged save', () => {
     expect(statSync(ownDir()).mode & 0o777).toBe(0o700)
     expect(statSync(join(ownDir(), `${saveId}.tmp`)).mode & 0o777).toBe(0o600)
     await staged.abortConnection('conn-1')
+  })
+
+  it('removes the temp when owner-only permissions cannot be kept', async () => {
+    secureWrite.refuse = true
+    const staged = saves()
+
+    await expect(staged.begin('conn-1', at(join(root, 'a.txt')), 1)).rejects.toThrow(
+      'staged_save_private_file_unavailable'
+    )
+
+    expect(temps()).toEqual([])
   })
 
   it('round-trips a 5 MB file in place, staging only in the private folder', async () => {

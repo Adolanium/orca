@@ -84,6 +84,8 @@ export class StagedFileSaves {
       throw new Error('staged_save_private_directory_unavailable')
     }
     if (!writeSecureFile(tempPath, '')) {
+      // The file is already published when restriction fails. Nothing else tracks it.
+      await rm(tempPath, { force: true })
       throw new Error('staged_save_private_file_unavailable')
     }
     this.saves.set(saveId, {
