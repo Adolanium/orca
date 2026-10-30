@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -74,6 +75,21 @@ const userFolderTemps = () => readdirSync(root).filter((name) => name !== 'profi
 // E7: a 5 MB lockfile opened from a remote host could be edited but not saved (720 KB cap).
 describe('a staged save', () => {
   const lockfile = '"node_modules/pkg": { "version": "1.0.0" },\n'.repeat(120_000)
+
+  it('restricts the staging directory and temp file to their owner', async () => {
+    mkdirSync(ownDir(), { recursive: true, mode: 0o777 })
+    chmodSync(ownDir(), 0o777)
+    const staged = saves()
+    const { saveId } = await staged.begin('conn-1', at(join(root, 'a.txt')), 1)
+    if (process.platform === 'win32') {
+      await staged.abortConnection('conn-1')
+      return
+    }
+
+    expect(statSync(ownDir()).mode & 0o777).toBe(0o700)
+    expect(statSync(join(ownDir(), `${saveId}.tmp`)).mode & 0o777).toBe(0o600)
+    await staged.abortConnection('conn-1')
+  })
 
   it('round-trips a 5 MB file in place, staging only in the private folder', async () => {
     const target = join(root, 'package-lock.json')
