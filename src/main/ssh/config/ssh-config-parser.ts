@@ -269,6 +269,7 @@ export function sshConfigHostsToTargets(
   existingTargetHosts: Set<string>
 ): SshTarget[] {
   const targets: SshTarget[] = []
+  const targetsByLabel = new Map<string, SshTarget>()
   const seenLabels = new Set(existingTargetHosts)
 
   for (const entry of hosts) {
@@ -278,8 +279,8 @@ export function sshConfigHostsToTargets(
     if (seenLabels.has(label)) {
       // OpenSSH keeps every IdentityFile from later blocks. Other fields stay on the first block.
       const laterFiles = entry.identityFiles ?? (entry.identityFile ? [entry.identityFile] : [])
-      const existing = targets.find((target) => target.label === label)
-      if (existing && laterFiles.length > 0) {
+      const existing = laterFiles.length > 0 ? targetsByLabel.get(label) : undefined
+      if (existing) {
         const kept =
           existing.identityFiles ?? (existing.identityFile ? [existing.identityFile] : [])
         existing.identityFiles = [...kept, ...laterFiles]
@@ -289,7 +290,7 @@ export function sshConfigHostsToTargets(
     }
     seenLabels.add(label)
 
-    targets.push({
+    const target: SshTarget = {
       id: `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       label,
       configHost: entry.host,
@@ -303,7 +304,9 @@ export function sshConfigHostsToTargets(
       gssapiAuthentication: entry.gssapiAuthentication,
       proxyCommand: entry.proxyCommand,
       jumpHost: entry.proxyJump
-    })
+    }
+    targets.push(target)
+    targetsByLabel.set(label, target)
   }
 
   return targets
