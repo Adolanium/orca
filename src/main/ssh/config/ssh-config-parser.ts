@@ -11,6 +11,7 @@ export type SshConfigHost = {
   port?: number
   user?: string
   identityFile?: string
+  identityFiles?: string[]
   identityAgent?: string
   identitiesOnly?: boolean
   gssapiAuthentication?: boolean
@@ -88,7 +89,9 @@ export function parseSshConfig(content: string): SshConfigHost[] {
         break
       case 'identityfile':
         for (const host of current) {
-          host.identityFile = resolveSshConfigHomePath(value)
+          const identityFile = resolveSshConfigHomePath(value)
+          host.identityFile ??= identityFile
+          host.identityFiles = [...(host.identityFiles ?? []), identityFile]
         }
         break
       case 'identityagent':
@@ -285,6 +288,7 @@ export function sshConfigHostsToTargets(
       port: entry.port ?? 22,
       username: entry.user ?? '',
       identityFile: entry.identityFile,
+      identityFiles: entry.identityFiles,
       identityAgent: entry.identityAgent,
       identitiesOnly: entry.identitiesOnly,
       gssapiAuthentication: entry.gssapiAuthentication,

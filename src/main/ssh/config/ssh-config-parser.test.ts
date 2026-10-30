@@ -100,6 +100,21 @@ Host myserver
     expect(hosts[0].identityFile).toBe(testHomePath('.ssh', 'id_ed25519'))
   })
 
+  it('preserves every IdentityFile in directive order', () => {
+    const config = `
+Host myserver
+  HostName example.com
+  IdentityFile ~/.ssh/first
+  IdentityFile ~/.ssh/second
+`
+    const hosts = parseSshConfig(config)
+    expect(hosts[0].identityFile).toBe(testHomePath('.ssh', 'first'))
+    expect(hosts[0].identityFiles).toEqual([
+      testHomePath('.ssh', 'first'),
+      testHomePath('.ssh', 'second')
+    ])
+  })
+
   it('parses Windows-style IdentityFile with ~ expansion', () => {
     const config = `
 Host myserver
@@ -128,6 +143,7 @@ Host quoted
       user: 'deploy',
       port: 2202,
       identityFile: testHomePath('.ssh', 'id with space'),
+      identityFiles: [testHomePath('.ssh', 'id with space')],
       identityAgent: testHomePath('.1password', 'agent sock'),
       identitiesOnly: true,
       proxyJump: 'bastion'
