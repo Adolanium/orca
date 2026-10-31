@@ -131,19 +131,22 @@ describe('cell reserve routes', () => {
     }
   )
 
-  it('hides a missing route before measuring an oversized body', async () => {
-    const { routes } = app({ ...cell, role: 'director' })
-    const response = await routes.request('/internal/reserve', {
-      method: 'POST',
-      headers: {
-        authorization: 'Bearer director-token',
-        'content-type': 'application/json',
-        'content-length': String(16 * 1024 + 1)
-      },
-      body: '{}'
-    })
+  it.each(['/internal/reserve', '/internal/demote'])(
+    'hides a missing %s route before measuring an oversized body',
+    async (path) => {
+      const { routes } = app({ ...cell, role: 'director' })
+      const response = await routes.request(path, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer director-token',
+          'content-type': 'application/json',
+          'content-length': String(16 * 1024 + 1)
+        },
+        body: '{}'
+      })
 
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ error: 'reserve_unavailable' })
-  })
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: 'reserve_unavailable' })
+    }
+  )
 })
