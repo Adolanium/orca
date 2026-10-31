@@ -13,6 +13,11 @@ import type { RelayConfig } from './config.js'
 import { readBearer } from './relay-token-verifier.js'
 
 const MAX_BODY_BYTES = 16 * 1024
+// The app-wide 4 KiB body limit skips these; they enforce their own larger one.
+export const CELL_RESERVE_ROUTE_PATHS: ReadonlySet<string> = new Set([
+  CELL_RESERVE_PATH,
+  CELL_DEMOTE_PATH
+])
 
 // Reuse director rehome credentials for writes; directors can already place any host via DB, so these grant no new authority.
 export function registerCellReserveRoutes(
