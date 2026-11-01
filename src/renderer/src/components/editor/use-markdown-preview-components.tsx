@@ -179,7 +179,6 @@ export function useMarkdownPreviewComponents({
             <MermaidBlock
               content={String(children).trimEnd()}
               isDark={isDark}
-              htmlLabels={false}
               onExpand={expandMermaidDiagram}
             />
           )
