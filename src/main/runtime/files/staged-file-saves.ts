@@ -27,6 +27,8 @@ type StagedSave = {
   tempPath: string
   totalBytes: number
   written: number
+  committing: boolean
+  aborting: boolean
   // Every op on a save waits for the one before, so a temp is never removed or read mid-append.
   pending: Promise<void>
   idleTimer: ReturnType<typeof setTimeout>
@@ -63,8 +65,6 @@ export class StagedFileSaves {
     if (!dir) {
       throw new Error('staged_save_unavailable')
     }
-    // Before the first save of this run, so the sweep never takes a temp this run made.
-    await this.sweepOrphans()
     const { maxBytesPerSave, maxSavesPerConnection, maxBytesPerConnection, maxSavesPerHost } =
       this.limits
     const mine = [...this.saves.values()].filter((save) => save.owner === owner)
@@ -78,31 +78,54 @@ export class StagedFileSaves {
     }
     const saveId = randomUUID()
     const tempPath = join(dir, `${saveId}.tmp`)
-    await mkdir(dir, { recursive: true, mode: 0o700 })
-    await chmod(dir, 0o700)
-    if (process.platform === 'win32' && !(await restrictWindowsDirectory(dir))) {
-      throw new Error('staged_save_private_directory_unavailable')
-    }
-    if (!writeSecureFile(tempPath, '')) {
-      // The file is already published when restriction fails. Nothing else tracks it.
-      await rm(tempPath, { force: true })
-      throw new Error('staged_save_private_file_unavailable')
-    }
-    this.saves.set(saveId, {
+    const save: StagedSave = {
       owner,
       requestedPath: target.requestedPath,
       targetPath: target.realPath,
       tempPath,
       totalBytes,
       written: 0,
+      committing: false,
+      aborting: false,
       pending: Promise.resolve(),
       idleTimer: this.idleTimer(owner, saveId)
-    })
+    }
+    this.saves.set(saveId, save)
+    try {
+      await this.queue(save, async () => {
+        // Before the first save of this run, so the sweep never takes a temp this run made.
+        await this.sweepOrphans()
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        await chmod(dir, 0o700)
+        if (process.platform === 'win32' && !(await restrictWindowsDirectory(dir))) {
+          throw new Error('staged_save_private_directory_unavailable')
+        }
+        if (!writeSecureFile(tempPath, '')) {
+          // The file is already published when restriction fails. Nothing else tracks it.
+          await rm(tempPath, { force: true })
+          throw new Error('staged_save_private_file_unavailable')
+        }
+      })
+      // Abort owns the temp and the reservation until its removal finishes.
+      if (save.aborting) {
+        throw new Error('staged_save_unknown')
+      }
+    } catch (error) {
+      if (!save.aborting) {
+        await rm(tempPath, { force: true }).catch(() => {})
+        this.release(saveId, save)
+      }
+      throw error
+    }
     return { saveId }
   }
 
   async append(owner: string, saveId: string, offset: number, bytes: Buffer): Promise<void> {
     const save = this.require(owner, saveId)
+    // Commit has queued the delete. A later chunk would recreate the temp with nothing left to remove it.
+    if (save.committing) {
+      throw new Error('staged_save_commit_in_progress')
+    }
     this.touch(owner, saveId, save)
     return this.queue(save, async () => {
       // In order only: a retried or reordered chunk can't land twice or leave a gap.
@@ -122,7 +145,11 @@ export class StagedFileSaves {
     authorize: (requestedPath: string) => Promise<string>
   ): Promise<FileWriteResult> {
     const save = this.require(owner, saveId)
-    this.release(saveId, save)
+    if (save.committing) {
+      throw new Error('staged_save_commit_in_progress')
+    }
+    save.committing = true
+    clearTimeout(save.idleTimer)
     return this.queue(save, async () => {
       try {
         // The file itself, not the count: a temp cut short outside this process can't be saved.
@@ -139,7 +166,11 @@ export class StagedFileSaves {
         // The same write a one-request save makes: same locks, compare, and file kept in place.
         return await writeLocalTextFileWithDiskPrecondition(save.targetPath, content, precondition)
       } finally {
-        await rm(save.tempPath, { force: true })
+        try {
+          await rm(save.tempPath, { force: true })
+        } finally {
+          this.release(saveId, save)
+        }
       }
     })
   }
@@ -150,8 +181,24 @@ export class StagedFileSaves {
     if (!save || save.owner !== owner) {
       return
     }
-    this.release(saveId, save)
-    await this.queue(save, () => rm(save.tempPath, { force: true })).catch(() => {})
+    // Commit releases this save after the guarded write. Dropping it now frees capacity early.
+    if (save.committing) {
+      return
+    }
+    // Setup may still be creating the temp. Keep the reservation until that file is gone.
+    if (save.aborting) {
+      await save.pending
+      return
+    }
+    save.aborting = true
+    clearTimeout(save.idleTimer)
+    await this.queue(save, async () => {
+      try {
+        await rm(save.tempPath, { force: true })
+      } finally {
+        this.release(saveId, save)
+      }
+    }).catch(() => {})
   }
 
   /** A closed socket can't finish its saves. */
@@ -205,7 +252,7 @@ export class StagedFileSaves {
   private require(owner: string, saveId: string): StagedSave {
     const save = this.saves.get(saveId)
     // Another connection's id reads as unknown, so ids can't be probed across clients.
-    if (!save || save.owner !== owner) {
+    if (!save || save.owner !== owner || save.aborting) {
       throw new Error('staged_save_unknown')
     }
     return save
