@@ -97,6 +97,10 @@ export class StagedFileSaves {
         await this.sweepOrphans()
         await mkdir(dir, { recursive: true, mode: 0o700 })
         await chmod(dir, 0o700)
+        // chmod can report success on DrvFs while the directory stays readable by others.
+        if (process.platform !== 'win32' && ((await stat(dir)).mode & 0o777) !== 0o700) {
+          throw new Error('staged_save_private_directory_unavailable')
+        }
         if (process.platform === 'win32' && !(await restrictWindowsDirectory(dir))) {
           throw new Error('staged_save_private_directory_unavailable')
         }

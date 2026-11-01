@@ -33,10 +33,16 @@ vi.mock('../../../shared/secure-file', async (importOriginal) => {
   }
 })
 const createGate = vi.hoisted(
-  (): { hold: Promise<void> | null; entered: boolean; failAfterCreate: boolean } => ({
+  (): {
+    hold: Promise<void> | null
+    entered: boolean
+    failAfterCreate: boolean
+    looseDirectory: boolean
+  } => ({
     hold: null,
     entered: false,
-    failAfterCreate: false
+    failAfterCreate: false,
+    looseDirectory: false
   })
 )
 const removeGate = vi.hoisted((): { hold: Promise<void> | null; entered: boolean } => ({
@@ -58,6 +64,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         throw new Error('staged_save_create_failed')
       }
       return actual.chmod(...args)
+    },
+    stat: async (...args: Parameters<typeof actual.stat>) => {
+      const stats = await actual.stat(...args)
+      if (createGate.looseDirectory && String(args[0]) === join(staging, String(PID))) {
+        return Object.assign(stats, { mode: (stats.mode & ~0o777) | 0o755 })
+      }
+      return stats
     },
     rm: async (...args: Parameters<typeof actual.rm>) => {
       const options = args[1]
@@ -83,6 +96,7 @@ beforeEach(() => {
   createGate.hold = null
   createGate.entered = false
   createGate.failAfterCreate = false
+  createGate.looseDirectory = false
   removeGate.hold = null
   removeGate.entered = false
 })
@@ -146,6 +160,24 @@ describe('a staged save', () => {
     )
 
     expect(temps()).toEqual([])
+  })
+
+  it('refuses a staging directory whose POSIX mode does not stick', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    createGate.looseDirectory = true
+    try {
+      const staged = saves()
+      await expect(staged.begin('conn-1', at(join(root, 'a.txt')), 1)).rejects.toThrow(
+        'staged_save_private_directory_unavailable'
+      )
+      expect(temps()).toEqual([])
+    } finally {
+      createGate.looseDirectory = false
+      if (platform) {
+        Object.defineProperty(process, 'platform', platform)
+      }
+    }
   })
 
   it('round-trips a 5 MB file in place, staging only in the private folder', async () => {
